@@ -41,9 +41,9 @@ def yfDownloadProcessingInterval(dfDay, df):
 
 def formulaPercentage(df):
     df['P/L'] = ((1-df['Open']/df['Close'])*100).round(2)    
-    df['maxHigh'] = ((1-df['Open']/df['High'])*100).round(2)
-    df['maxLow'] = ((1-df['Open']/df['Low'])*100).round(2)
-    df['DiffPvClose/Open'] = (df['Open']-df['PvClose']).round(2)  
+    df['maxHigh'] = ((df['High']/df['Open']-1)*100).round(2)
+    df['maxLow'] = ((df['Low']/df['Open']-1)*100).round(2)
+    df['Open-PvClose'] = (df['Open']-df['PvClose']).round(2)  
     df['closeTolerance'] = df.apply(lambda row: row['P/L'] - row['maxHigh'] if row['P/L'] > 0 else row['P/L'] - row['maxLow'] if row['P/L'] < 0 else 0, axis=1)
     df['priceBand'] = (((df['High'] - df['Low'])/df['Open'])*100).round(2)
     return df
@@ -117,11 +117,39 @@ def buy_sell_probability_in_profit_and_loss(df):
         }
     return buysellProbability
 
+def NextDayPrediction(df):
+    predTmOpen = round((df['Open']/df['PvClose']-1).mean()*df['Close'].iloc[-1]+df['Close'].iloc[-1], 2)
+    predTmEntry1 = round((df['Entry1']/df['Open']-1).mean()*predTmOpen+predTmOpen, 2)
+    predTmEntry2 = round((df['Entry2']/df['Open']-1).mean()*predTmOpen+predTmOpen, 2)
+    predTmExit1 = round((df['Exit1']/df['Open']-1).mean()*predTmOpen+predTmOpen, 2)
+    predTmExit2 = round((df['Exit2']/df['Open']-1).mean()*predTmOpen+predTmOpen, 2)
+    predTmClose = round(predTmOpen/(1-(1-df['Open']/df['Close']).mean()), 2)
+    predTmMaxhigh = round((df['maxHigh'].mean()/100)*predTmOpen+predTmOpen, 2)
+    predTmMaxlow = round((df['maxLow'].mean()/100)*predTmOpen+predTmOpen, 2)
+    EtEx1Profit = round((1-predTmEntry1/predTmExit1)*100, 2)
+    EtEx2Profit = round((1-predTmEntry2/predTmExit2)*100, 2)
+    predPL = round((1-predTmOpen/predTmClose)*100, 2)
+    predDct = {
+        'predTmOpen': predTmOpen,
+        'predTmEntry1': predTmEntry1,
+        'predTmExit1': predTmExit1,
+        'predTmEntry2': predTmEntry2,
+        'predTmExit2': predTmExit2,
+        'predTmClose': predTmClose,
+        'predTmMaxhigh': predTmMaxhigh,
+        'predTmMaxlow': predTmMaxlow,
+        'EtEx1Profit': EtEx1Profit,
+        'EtEx2Profit': EtEx2Profit,
+        'predTmP/L': predPL
+        }
+    return predDct
+
 def ProbabilityDataProcessing(df, symbol): 
+    predDct = NextDayPrediction(df)
     df['Symbol'] = symbol
     dct = df[['Symbol', 'Date', 'Open', 'High', 'Low', 'Close', 'P/L', 'maxHigh', 'maxLow', 'closeTolerance', 'priceBand']].iloc[-1].to_dict()
     buysellProbability = buy_sell_probability_in_profit_and_loss(df)
-    dct = {**dct, **buysellProbability}
+    dct = {**dct, **buysellProbability, **predDct}
     return dct
 
 def fetching_all_stock_data_based_on_todays(symbol):
@@ -140,6 +168,19 @@ def fetching_all_stock_data_based_on_todays(symbol):
     df = df.dropna().reset_index(drop=True)
     dct = ProbabilityDataProcessing(df, symbol)
     return dct
+
+
+symbol = 'BLS' + '.NS'
+df, dfInterval = yfDownload(symbol, '1y', '5m')
+df = formulaPercentage(df)
+df = MovingAverage44(df)
+dfInterval = MovingAverage44(dfInterval)
+dfCandle = pd.merge(pd.merge(dfInterval.groupby('Date') ['CandleP/N_OpenDay'].value_counts().unstack(fill_value=0).reset_index().rename(columns={-1: 'nCandleBelowOpen', 1: 'pCandleAboveOpen'}), dfInterval.groupby('Date') ['CandleP/N'].value_counts().unstack(fill_value=0).reset_index().rename(columns={-1: 'nCandle', 1: 'pCandle'}), how='left', on='Date'), dfInterval.groupby('Date') ['44TF'].value_counts().unstack(fill_value=0).reset_index().rename(columns={1: 'Hits44MA'})[['Date', 'Hits44MA']], how='left', on='Date')
+dfEtEx = pd.merge(EntryExitMinToMax(dfInterval), EntryExitMaxToMin(dfInterval), how='left', on='Date')
+dfItCd = pd.merge(dfCandle, dfEtEx,how='left', on='Date')
+df = pd.merge(df, dfItCd, how='left', on='Date')
+df = df.dropna().reset_index(drop=True)
+dct = ProbabilityDataProcessing(df, symbol)
 
 
 
