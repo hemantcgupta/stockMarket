@@ -144,43 +144,79 @@ def NextDayPrediction(df):
         }
     return predDct
 
-def ProbabilityDataProcessing(df, symbol): 
+def ProbabilityDataProcessing(df, dfInterval, symbol): 
     predDct = NextDayPrediction(df)
+    dctSR = {'Support': dfInterval['Support'].value_counts().sort_index().to_dict(), 'Resistance': dfInterval['Resistance'].value_counts().sort_index().to_dict()}
     df['Symbol'] = symbol
     dct = df[['Symbol', 'Date', 'Open', 'High', 'Low', 'Close', 'P/L', 'maxHigh', 'maxLow', 'closeTolerance', 'priceBand']].iloc[-1].to_dict()
     buysellProbability = buy_sell_probability_in_profit_and_loss(df)
-    dct = {**dct, **buysellProbability, **predDct}
+    dct = {**dct, **buysellProbability, **predDct, **dctSR}
     return dct
 
+def find_support_resistance(df, window_size=20):
+    data = df[['Datetime', 'Low', 'High']]
+    supports = []
+    resistances = []
+    for i in range(window_size, len(data) - window_size):
+        window_low = data['Low'].iloc[i - window_size:i + window_size]
+        window_high = data['High'].iloc[i - window_size:i + window_size]
+        min_val = window_low.min()
+        max_val = window_high.max()
+        avg_low = window_low.mean()
+        avg_high = window_high.mean()
+        if data['Low'].iloc[i] < avg_low and data['Low'].iloc[i] == min_val:
+            supports.append({'Datetime': data['Datetime'].iloc[i], 'Support': data['Low'].iloc[i]})
+        if data['High'].iloc[i] > avg_high and data['High'].iloc[i] == max_val:
+            resistances.append({'Datetime': data['Datetime'].iloc[i], 'Resistance': data['High'].iloc[i]})
+    dfS = pd.DataFrame(supports)
+    dfR = pd.DataFrame(resistances)
+    dfSR = pd.merge(df, dfS, how='left', on='Datetime').merge(dfR, how='left', on='Datetime')
+    return dfSR
+
+
+def saveFilesInMachine(symbol, df, subFolder):
+    filePath = fr"./Data/{subFolder}/{df['Date'].astype(str).iloc[-1]}/{symbol.split('.')[0]}.xlsx"
+    os.makedirs(os.path.dirname(filePath), exist_ok=True)
+    df.to_excel(filePath, index=False)
+    
 def fetching_all_stock_data_based_on_todays(symbol):
     symbol = symbol+'.NS'
     df, dfInterval = yfDownload(symbol, '1y', '5m')
     df = formulaPercentage(df)
     df = MovingAverage44(df)
     dfInterval = MovingAverage44(dfInterval)
+    dfInterval = find_support_resistance(dfInterval)
     dfCandle = pd.merge(pd.merge(dfInterval.groupby('Date') ['CandleP/N_OpenDay'].value_counts().unstack(fill_value=0).reset_index().rename(columns={-1: 'nCandleBelowOpen', 1: 'pCandleAboveOpen'}), dfInterval.groupby('Date') ['CandleP/N'].value_counts().unstack(fill_value=0).reset_index().rename(columns={-1: 'nCandle', 1: 'pCandle'}), how='left', on='Date'), dfInterval.groupby('Date') ['44TF'].value_counts().unstack(fill_value=0).reset_index().rename(columns={1: 'Hits44MA'})[['Date', 'Hits44MA']], how='left', on='Date')
     dfEtEx = pd.merge(EntryExitMinToMax(dfInterval), EntryExitMaxToMin(dfInterval), how='left', on='Date')
     dfItCd = pd.merge(dfCandle, dfEtEx,how='left', on='Date')
     df = pd.merge(df, dfItCd, how='left', on='Date')
-    filePath = fr"./Data/Processing/{df['Date'].astype(str).iloc[-1]}/{symbol.split('.')[0]}.xlsx"
-    os.makedirs(os.path.dirname(filePath), exist_ok=True)
-    df.to_excel(filePath, index=False)
+    saveFilesInMachine(symbol, df, 'Processing')
+    dfInterval['Datetime'] = dfInterval['Datetime'].dt.tz_localize(None)
+    saveFilesInMachine(symbol, dfInterval, 'intervalData')
     df = df.dropna().reset_index(drop=True)
-    dct = ProbabilityDataProcessing(df, symbol)
+    dct = ProbabilityDataProcessing(df, dfInterval, symbol)
     return dct
 
 
-symbol = 'BLS' + '.NS'
-df, dfInterval = yfDownload(symbol, '1y', '5m')
-df = formulaPercentage(df)
-df = MovingAverage44(df)
-dfInterval = MovingAverage44(dfInterval)
-dfCandle = pd.merge(pd.merge(dfInterval.groupby('Date') ['CandleP/N_OpenDay'].value_counts().unstack(fill_value=0).reset_index().rename(columns={-1: 'nCandleBelowOpen', 1: 'pCandleAboveOpen'}), dfInterval.groupby('Date') ['CandleP/N'].value_counts().unstack(fill_value=0).reset_index().rename(columns={-1: 'nCandle', 1: 'pCandle'}), how='left', on='Date'), dfInterval.groupby('Date') ['44TF'].value_counts().unstack(fill_value=0).reset_index().rename(columns={1: 'Hits44MA'})[['Date', 'Hits44MA']], how='left', on='Date')
-dfEtEx = pd.merge(EntryExitMinToMax(dfInterval), EntryExitMaxToMin(dfInterval), how='left', on='Date')
-dfItCd = pd.merge(dfCandle, dfEtEx,how='left', on='Date')
-df = pd.merge(df, dfItCd, how='left', on='Date')
-df = df.dropna().reset_index(drop=True)
-dct = ProbabilityDataProcessing(df, symbol)
+# symbol = 'BLS' + '.NS'
+# df, dfInterval = yfDownload(symbol, '1y', '5m')
+# df = formulaPercentage(df)
+# df = MovingAverage44(df)
+# dfInterval = MovingAverage44(dfInterval)
+# dfInterval = find_support_resistance(dfInterval)
+# dfCandle = pd.merge(pd.merge(dfInterval.groupby('Date') ['CandleP/N_OpenDay'].value_counts().unstack(fill_value=0).reset_index().rename(columns={-1: 'nCandleBelowOpen', 1: 'pCandleAboveOpen'}), dfInterval.groupby('Date') ['CandleP/N'].value_counts().unstack(fill_value=0).reset_index().rename(columns={-1: 'nCandle', 1: 'pCandle'}), how='left', on='Date'), dfInterval.groupby('Date') ['44TF'].value_counts().unstack(fill_value=0).reset_index().rename(columns={1: 'Hits44MA'})[['Date', 'Hits44MA']], how='left', on='Date')
+# dfEtEx = pd.merge(EntryExitMinToMax(dfInterval), EntryExitMaxToMin(dfInterval), how='left', on='Date')
+# dfItCd = pd.merge(dfCandle, dfEtEx,how='left', on='Date')
+# df = pd.merge(df, dfItCd, how='left', on='Date')
+# df = df.dropna().reset_index(drop=True)
+# dct = ProbabilityDataProcessing(df, dfInterval, symbol)
+
+
+
+
+
+
+
 
 
 
